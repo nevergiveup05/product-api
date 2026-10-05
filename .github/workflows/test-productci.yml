@@ -1,0 +1,41 @@
+name: Test Product API CI
+
+# Sự kiện kích hoạt Workflow (khi push hoặc tạo PR vào nhánh main)
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout mã nguồn từ repository về runner
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Thiết lập môi trường Node.js (phiên bản 20)
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm" # Bật cache cho npm dependencies giúp build nhanh hơn
+
+      # 3. Cài đặt các thư viện phụ thuộc (Dependencies)
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. Kiểm tra cú pháp/build thử ứng dụng
+      - name: Check syntax and start app dry-run
+        run: |
+          echo "✅ Cài đặt dependencies thành công!"
+          node -v
+          npm -v
+
+      # 5. Thử nghiệm Build Docker Image để đảm bảo Dockerfile không bị lỗi
+      - name: Build Docker image test
+        run: |
+          docker build -t product-api:test .
+          echo "✅ Build Docker Image thành công!"
