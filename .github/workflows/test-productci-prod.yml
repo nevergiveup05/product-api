@@ -1,0 +1,97 @@
+name: Production-Grade Product API CI Pipeline
+
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    branches: [main, production]
+
+jobs:
+  integration-and-build:
+    runs-on: ubuntu-latest
+
+    # Khởi chạy Service Container MongoDB trực tiếp trên runner của GitHub
+    services:
+      mongodb:
+        image: mongo:latest
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping:1})' || mongo --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      # 1. Checkout mã nguồn
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 2. Thiết lập môi trường Node.js
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # 3. Cài đặt toàn bộ dependencies (bao gồm devDependencies để test)
+      - name: Install Dependencies
+        run: npm ci
+
+      # 4. Kiểm tra mã nguồn (Linter & Syntax check)
+      - name: Validate Source Code Syntax
+        run: node --check index.js
+
+      # 5. Chạy thử nghiệm kết nối & CRUD API thực tế với MongoDB
+      - name: Run Integration Tests (CRUD Validation)
+        env:
+          PORT: 3000
+          # Kết nối tới MongoDB Service đang chạy ở localhost:27017 trên runner
+          MONGO_URI: mongodb://localhost:27017/product_db_test
+        run: |
+          # Chạy ứng dụng dưới dạng background process
+          node index.js &
+          APP_PID=$!
+
+          # Đợi 3 giây để server khởi tạo kết nối MongoDB
+          sleep 3
+
+          echo "🚀 Bắt đầu Integration Test cho luồng CRUD..."
+
+          # 1. CREATE: Tạo mới sản phẩm
+          CREATE_RES=$(curl -s -X POST http://localhost:3000/api/products \
+            -H "Content-Type: application/json" \
+            -d '{"pid": "P001", "pname": "Laptop Dell", "price": 1500, "quantity": 10}')
+          echo "Create Result: $CREATE_RES"
+
+          # 2. READ: Lấy danh sách sản phẩm
+          READ_RES=$(curl -s http://localhost:3000/api/products)
+          echo "Read Result: $READ_RES"
+
+          # 3. UPDATE: Cập nhật thông tin sản phẩm P001
+          UPDATE_RES=$(curl -s -X PUT http://localhost:3000/api/products/P001 \
+            -H "Content-Type: application/json" \
+            -d '{"pname": "Laptop Dell XPS", "price": 1800, "quantity": 8}')
+          echo "Update Result: $UPDATE_RES"
+
+          # 4. DELETE: Xóa sản phẩm P001
+          DELETE_RES=$(curl -s -X DELETE http://localhost:3000/api/products/P001)
+          echo "Delete Result: $DELETE_RES"
+
+          # Dừng process Node.js sau khi hoàn tất test
+          kill $APP_PID
+          echo "✅ Hoàn thành bài test Integration CRUD thành công!"
+
+      # 6. Build Docker Image tiêu chuẩn Production (sử dụng Docker Cache)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Production Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false # Chưa push lên Docker Registry
+          tags: product-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
