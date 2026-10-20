@@ -1,0 +1,24 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: product-mongodb
+    ports:
+      - "127.0.0.1:27020:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  product-api:
+    build: .
+    image: product-api:1.0
+    container_name: product-api
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://mongodb:27017/${MONGO_DB:-productdb}
+    depends_on:
+      - mongodb
+    restart: on-failure
+
+volumes:
+  mongo_data:
