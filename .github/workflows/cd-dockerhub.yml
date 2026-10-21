@@ -59,3 +59,45 @@ jobs:
       - name: Dọn dẹp
         if: always()
         run: docker compose down -v
+  deploy:
+    name: Triển khai lên Docker Engine trên máy local
+    needs: publish
+    runs-on: self-hosted
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Lấy docker-compose-prod.yaml đúng commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Chọn đúng tag image vừa đẩy lên Docker Hub
+        shell: powershell
+        run: |
+          $tag = $env:SHA.Substring(0,7)
+          "IMAGE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Kéo image mới và chạy lại, chờ healthcheck
+        shell: powershell
+        run: |
+          docker compose -f docker-compose-prod.yaml pull
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          docker compose -f docker-compose-prod.yaml up -d --wait --wait-timeout 120
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          docker compose -f docker-compose-prod.yaml ps
+
+      - name: Xác nhận bản triển khai khỏe
+        shell: powershell
+        run: |
+          $api = docker inspect -f "{{.State.Health.Status}}" prod-product-api
+          $db = docker inspect -f "{{.State.Health.Status}}" prod-mongodb
+          Write-Host "product-api: $api, mongodb: $db"
+          if ($api -ne "healthy" -or $db -ne "healthy") { exit 1 }
+          $r = Invoke-RestMethod http://localhost:3100/health
+          Write-Host ($r | ConvertTo-Json -Compress)
+          if ($r.status -ne "ok") { exit 1 }
+
+      - name: In log khi có lỗi
+        if: failure()
+        shell: powershell
+        run: docker compose -f docker-compose-prod.yaml logs --tail 50
