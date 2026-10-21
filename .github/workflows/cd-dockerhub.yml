@@ -1,0 +1,61 @@
+name: CD Docker Hub
+
+on:
+  workflow_run:
+    workflows: ["Test Product CI Prod"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build, healthcheck và đẩy image lên Docker Hub
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    env:
+      DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Lấy mã nguồn đúng commit đã qua CI
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Đăng nhập Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build và chạy, chờ healthcheck
+        run: docker compose up -d --build --wait --wait-timeout 120
+
+      - name: Xác nhận cả hai dịch vụ healthy
+        run: |
+          docker compose ps
+          test "$(docker inspect -f '{{.State.Health.Status}}' product-mongodb)" = "healthy"
+          test "$(docker inspect -f '{{.State.Health.Status}}' product-api)" = "healthy"
+
+      - name: Smoke test CRUD
+        run: bash scripts/smoke-test.sh http://localhost:3000
+
+      - name: Gắn tag cho image đã qua healthcheck
+        run: |
+          docker tag product-api:1.0 "$DOCKERHUB_USER/product-api:latest"
+          docker tag product-api:1.0 "$DOCKERHUB_USER/product-api:${SHA::7}"
+
+      - name: Đẩy image lên Docker Hub
+        run: |
+          docker push "$DOCKERHUB_USER/product-api:latest"
+          docker push "$DOCKERHUB_USER/product-api:${SHA::7}"
+
+      - name: In log khi có lỗi
+        if: failure()
+        run: docker compose logs
+
+      - name: Dọn dẹp
+        if: always()
+        run: docker compose down -v
