@@ -1,0 +1,67 @@
+name: Test Product CI Prod
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  integration-test:
+    name: Test CRUD với MongoDB service
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MONGO_URI: mongodb://localhost:27017/productdb_test
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@v4
+
+      - name: Cài Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Cài thư viện
+        run: npm ci
+
+      - name: Chạy test CRUD
+        run: npm test
+
+  docker-e2e:
+    name: Docker Compose end-to-end
+    runs-on: ubuntu-latest
+    needs: integration-test
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@v4
+
+      - name: Build và chạy bằng Docker Compose, chờ healthcheck
+        run: docker compose up -d --build --wait --wait-timeout 120
+
+      - name: Xác nhận cả hai dịch vụ healthy
+        run: |
+          docker compose ps
+          test "$(docker inspect -f '{{.State.Health.Status}}' product-mongodb)" = "healthy"
+          test "$(docker inspect -f '{{.State.Health.Status}}' product-api)" = "healthy"
+
+      - name: Smoke test CRUD qua HTTP
+        run: bash scripts/smoke-test.sh http://localhost:3000
+
+      - name: In log khi có lỗi
+        if: failure()
+        run: docker compose logs
+
+      - name: Dọn dẹp
+        if: always()
+        run: docker compose down -v
